@@ -330,16 +330,20 @@ class MSG_GAN:
 
         return loss.item()
 
-    def create_grid(self, samples, img_files):
+    def create_grid(self, samples, img_files,
+                    sum_writer=None, reses=None, step=None):
         """
         utility function to create a grid of GAN samples
         :param samples: generated samples for storing list[Tensors]
         :param img_files: list of names of files to write
+        :param sum_writer: summary writer object
+        :param reses: resolution strings (used only if sum_writer is not None)
+        :param step: global step (used only if sum_writer is not None)
         :return: None (saves multiple files)
         """
-        from torchvision.utils import save_image
+        from torchvision.utils import save_image, make_grid
         from torch.nn.functional import interpolate
-        from numpy import sqrt, power
+        from numpy import sqrt, power, ceil
 
         # dynamically adjust the colour range of the images:       
         samples = [Generator.adjust_dynamic_range(sample) for sample in samples]
@@ -354,14 +358,18 @@ class MSG_GAN:
             save_image(sample, img_file, nrow=int(sqrt(sample.shape[0])),
                        normalize=True, scale_each=True, padding=0)
 
+        if sum_writer is not None:
+            for sample, res in zip(samples, reses):
+                image = make_grid(sample, nrow=int(ceil(sqrt(sample.shape[0]))),
+                                  normalize=True, scale_each=True, padding=0)
+                sum_writer.add_image(res, image, step)
+
     def train(self, data, gen_optim, dis_optim, loss_fn, normalize_latents=True,
               start=1, num_epochs=12, feedback_factor=10, checkpoint_factor=1,
               data_percentage=100, num_samples=36,
-              log_dir=None, sample_dir="./samples",
-              save_dir="./models"):
-
-        # TODO_complete write the documentation for this method
-        # no more procrastination ... HeHe
+              log_dir=None, sample_dir="./samples", num_fid_images=50000,
+              save_dir="./models", fid_temp_folder="./samples/fid_imgs/",
+              fid_real_stats=None, fid_batch_size=64):
         """
         Method for training the network
         :param data: pytorch dataloader which iterates over images
@@ -381,11 +389,21 @@ class MSG_GAN:
         :param num_samples: number of samples to be drawn for feedback grid
         :param log_dir: path to directory for saving the loss.log file
         :param sample_dir: path to directory for saving generated samples' grids
+        :param num_fid_images: number of images to generate for calculating the FID
         :param save_dir: path to directory for saving the trained models
+        :param fid_temp_folder: path to save the generated images
+        :param fid_real_stats: path to the npz stats file for real images
+        :param fid_batch_size: batch size used for generating fid images
+                               Same will be used for calculating the fid too.
         :return: None (writes multiple files to disk)
         """
 
         from torch.nn.functional import avg_pool2d
+        from tensorboardX import SummaryWriter
+        from shutil import rmtree
+        from tqdm import tqdm
+        from scipy.misc import imsave
+        from MSG_GAN.FID import fid_score
 
         # turn the generator and discriminator into train mode
         self.gen.train()
@@ -397,6 +415,14 @@ class MSG_GAN:
             "dis_optim is not an Optimizer"
 
         print("Starting the training process ... ")
+
+        # create the summary writer
+        sum_writer = SummaryWriter(os.path.join(log_dir, "tensorboard"))
+
+        # create a grid of samples and save it
+        reses = [str(int(np.power(2, dep))) + "_x_"
+                 + str(int(np.power(2, dep)))
+                 for dep in range(2, self.depth + 2)]
 
         # create fixed_input for debugging
         fixed_input = th.randn(num_samples, self.latent_size).to(self.device)
@@ -453,6 +479,10 @@ class MSG_GAN:
                     print("Elapsed [%s] batch: %d  d_loss: %f  g_loss: %f"
                           % (elapsed, i, dis_loss, gen_loss))
 
+                    # add summary of the losses
+                    sum_writer.add_scalar("dis_loss", dis_loss, global_step)
+                    sum_writer.add_scalar("gen_loss", gen_loss, global_step)
+
                     # also write the losses to the log file:
                     if log_dir is not None:
                         log_file = os.path.join(log_dir, "loss.log")
@@ -462,9 +492,6 @@ class MSG_GAN:
                                       "\t" + str(gen_loss) + "\n")
 
                     # create a grid of samples and save it
-                    reses = [str(int(np.power(2, dep))) + "_x_"
-                             + str(int(np.power(2, dep)))
-                             for dep in range(2, self.depth + 2)]
                     gen_img_files = [os.path.join(sample_dir, res, "gen_" +
                                                   str(epoch) + "_" +
                                                   str(i) + ".png")
@@ -482,7 +509,10 @@ class MSG_GAN:
                         self.create_grid(
                             self.gen(fixed_input) if not self.use_ema
                             else self.gen_shadow(fixed_input),
-                            gen_img_files)
+                            gen_img_files,
+                            sum_writer,
+                            reses,
+                            global_step)
 
                 # increment the global_step:
                 global_step += 1
@@ -512,6 +542,55 @@ class MSG_GAN:
                     gen_shadow_save_file = os.path.join(save_dir, "GAN_GEN_SHADOW_"
                                                         + str(epoch) + ".pth")
                     th.save(self.gen_shadow.state_dict(), gen_shadow_save_file)
+
+                # ==================================================================
+                # Perform the FID calculation during training for an estimate
+                # ==================================================================
+
+                # setup the directory for generating the images
+                if os.path.isdir(fid_temp_folder):
+                    rmtree(fid_temp_folder)
+                os.makedirs(fid_temp_folder, exist_ok=True)
+
+                # generate the images:
+                pbar = tqdm(total=num_fid_images)
+                generated_images = 0
+
+                print("generating images for fid calculation ...")
+                while generated_images < num_fid_images:
+                    b_size = min(fid_batch_size, num_fid_images - generated_images)
+                    points = th.randn(b_size, self.latent_size).to(self.device)
+                    if normalize_latents:
+                        points = (points / points.norm(dim=1, keepdim=True)) \
+                                 * (self.latent_size ** 0.5)
+                    imgs = self.gen(points)[-1].detach()
+                    for i in range(len(imgs)):
+                        imgs[i] = Generator.adjust_dynamic_range(imgs[i])
+                    pbar.update(b_size)
+                    for img in imgs:
+                        imsave(os.path.join(fid_temp_folder,
+                                            str(generated_images) + ".jpg"),
+                               img.permute(1, 2, 0).cpu())
+                        generated_images += 1
+                pbar.close()
+
+                # compute the fid now:
+                fid, _ = fid_score.calculate_fid_given_paths(
+                    (fid_real_stats, fid_temp_folder),
+                    fid_batch_size,
+                    True if self.device == th.device("cuda") else False,
+                    2048  # using he default value
+                )
+
+                # print the compute fid value:
+                print("FID at epoch %d: %.6f" % (epoch, fid))
+
+                # log the fid value in tensorboard:
+                sum_writer.add_scalar("FID", fid, epoch)
+                # note that for fid value, the global step is the epoch number.
+                # it is not the global step. This makes the fid graph more informative
+
+                # ==================================================================
 
         print("Training completed ...")
 

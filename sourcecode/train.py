@@ -43,6 +43,12 @@ def parse_arguments():
                         default=None,
                         help="saved state for discriminator optimizer")
 
+    parser.add_argument("--pytorch_dataset", action="store", type=str,
+                        default=None,
+                        help="Whether to use a default pytorch dataset" +
+                             "Currently supported:" +
+                             "1.) cifar-10")
+
     parser.add_argument("--images_dir", action="store", type=str,
                         default="../data/celeba",
                         help="path for the images directory")
@@ -139,6 +145,29 @@ def parse_arguments():
                         default=3,
                         help="number of parallel workers for reading files")
 
+    # =======================================================================================
+    # FID RELATED ARGUMENTS ... :)
+    # =======================================================================================
+
+    parser.add_argument("num_fid_images", action="store", type=int,
+                        default=50000,
+                        help="number of images used for calculating fid. Default: 50K")
+
+    parser.add_argument("--fid_temp_folder", action="store", type=str,
+                        default=None,
+                        help="folder to store the temporary generated fid images")
+
+    parser.add_argument("--fid_real_stats", action="store", type=str,
+                        default=None,
+                        help="Path to the precomputed fid real statistics file (.npz)")
+
+    parser.add_argument("--fid_batch_size", action="store", type=int,
+                        default=64,
+                        help="Batch size used for the fid computation" +
+                             "(Both image generation and fid calculation)")
+
+    # ========================================================================================
+
     args = parser.parse_args()
 
     return args
@@ -152,18 +181,29 @@ def main(args):
     """
     from MSG_GAN.GAN import MSG_GAN
     from data_processing.DataLoader import FlatDirectoryImageDataset, \
-        get_transform, get_data_loader, FoldersDistributedDataset
+        get_transform, get_data_loader, FoldersDistributedDataset, IgnoreLabels
+    from torchvision.datasets import CIFAR10
     from MSG_GAN import Losses as lses
 
-    # create a data source:
-    data_source = FlatDirectoryImageDataset if not args.folder_distributed \
-        else FoldersDistributedDataset
+    # transformation routine:
+    res = int(np.power(2, args.depth + 1))
+    img_transform = get_transform((res, res), flip_horizontal=args.flip_augment)
 
-    dataset = data_source(
-        args.images_dir,
-        transform=get_transform((int(np.power(2, args.depth + 1)),
-                                 int(np.power(2, args.depth + 1))),
-                                flip_horizontal=args.flip_augment))
+    # create a data source:
+    if args.pytorch_dataset is None:
+        data_source = FlatDirectoryImageDataset if not args.folder_distributed \
+            else FoldersDistributedDataset
+
+        dataset = data_source(
+            args.images_dir,
+            transform=img_transform)
+    else:
+        dataset_name = args.pytorch_dataset.lower()
+        if dataset_name == "cifar-10":
+            dataset = IgnoreLabels(CIFAR10(
+                args.images_dir,  transform=img_transform, download=True))
+        else:
+            raise Exception("Unknown dataset  requested")
 
     data = get_data_loader(dataset, args.batch_size, args.num_workers)
     print("Total number of images in the dataset:", len(dataset))
@@ -245,7 +285,11 @@ def main(args):
         sample_dir=args.sample_dir,
         save_dir=args.model_dir,
         log_dir=args.model_dir,
-        start=args.start
+        start=args.start,
+        num_fid_images=args.num_fid_images,
+        fid_temp_folder=args.fid_temp_folder,
+        fid_real_stats=args.fid_real_stats,
+        fid_batch_size=args.fid_batch_size
     )
 
 
