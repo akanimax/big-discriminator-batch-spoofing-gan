@@ -553,10 +553,10 @@ class MSG_GAN:
                 os.makedirs(fid_temp_folder, exist_ok=True)
 
                 # generate the images:
+                print("generating images for fid calculation ...")
                 pbar = tqdm(total=num_fid_images)
                 generated_images = 0
 
-                print("generating images for fid calculation ...")
                 while generated_images < num_fid_images:
                     b_size = min(fid_batch_size, num_fid_images - generated_images)
                     points = th.randn(b_size, self.latent_size).to(self.device)
@@ -575,7 +575,7 @@ class MSG_GAN:
                 pbar.close()
 
                 # compute the fid now:
-                fid, _ = fid_score.calculate_fid_given_paths(
+                fid = fid_score.calculate_fid_given_paths(
                     (fid_real_stats, fid_temp_folder),
                     fid_batch_size,
                     True if self.device == th.device("cuda") else False,
