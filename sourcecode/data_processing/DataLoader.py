@@ -58,7 +58,7 @@ class FlatDirectoryImageDataset(Dataset):
             img = np.load(img_name)
             img = Image.fromarray(img.squeeze(0).transpose(1, 2, 0))
         else:
-            img = Image.open(img_name)
+            img = Image.open(img_name).convert("RGB")
 
         # apply the transforms on the image
         if self.transform is not None:
@@ -125,16 +125,11 @@ class FoldersDistributedDataset(Dataset):
             img = np.load(img_name)
             img = Image.fromarray(img)
         else:
-            img = Image.open(img_name)
+            img = Image.open(img_name).convert("RGB")
 
         # apply the transforms on the image
         if self.transform is not None:
             img = self.transform(img)
-
-        if img.shape[0] == 4:
-            # ignore the alpha channel
-            # in the image if it exists
-            img = img[:3, :, :]
 
         # return the image:
         return img

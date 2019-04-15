@@ -413,8 +413,7 @@ class DisGeneralConvBlock(th.nn.Module):
         :param out_channels: number of output channels
         :param use_eql: whether to use equalized learning rate
         """
-        from torch.nn import AvgPool2d, LeakyReLU
-        from torch.nn import Conv2d
+        from torch.nn import LeakyReLU, Conv2d, AvgPool2d
 
         super().__init__()
 
@@ -430,8 +429,9 @@ class DisGeneralConvBlock(th.nn.Module):
             self.conv_2 = Conv2d(in_channels, out_channels, (3, 3),
                                  padding=1, bias=True)
 
-        self.downSampler = AvgPool2d(2)  # downsampler
-
+        # downsapmler
+        self.downsampler = AvgPool2d(2)
+ 
         # leaky_relu:
         self.lrelu = LeakyReLU(0.2)
 
@@ -441,9 +441,11 @@ class DisGeneralConvBlock(th.nn.Module):
         :param x: input
         :return: y => output
         """
+        from torch.nn.functional import interpolate
+
         # define the computations
         y = self.lrelu(self.conv_1(x))
         y = self.lrelu(self.conv_2(y))
-        y = self.downSampler(y)
+        y = self.downsampler(y)
 
         return y

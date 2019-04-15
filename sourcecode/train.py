@@ -71,7 +71,7 @@ def parse_arguments():
                              "hinge, relativistic-hinge")
 
     parser.add_argument("--depth", action="store", type=int,
-                        default=6,
+                        default=7,
                         help="Depth of the GAN")
 
     parser.add_argument("--latent_size", action="store", type=int,
@@ -79,7 +79,7 @@ def parse_arguments():
                         help="latent size for the generator")
 
     parser.add_argument("--batch_size", action="store", type=int,
-                        default=16,
+                        default=128,
                         help="batch_size for training")
 
     parser.add_argument("--start", action="store", type=int,
@@ -87,11 +87,11 @@ def parse_arguments():
                         help="starting epoch number")
 
     parser.add_argument("--num_epochs", action="store", type=int,
-                        default=3,
+                        default=1000,
                         help="number of epochs for training")
 
     parser.add_argument("--feedback_factor", action="store", type=int,
-                        default=100,
+                        default=10,
                         help="number of logs to generate per epoch")
 
     parser.add_argument("--num_samples", action="store", type=int,
@@ -100,7 +100,7 @@ def parse_arguments():
                              " should be a square number preferably")
 
     parser.add_argument("--checkpoint_factor", action="store", type=int,
-                        default=1,
+                        default=10,
                         help="save model per n epochs")
 
     parser.add_argument("--g_lr", action="store", type=float,
@@ -137,7 +137,6 @@ def parse_arguments():
 
     parser.add_argument("--num_workers", action="store", type=int,
                         default=3,
-
                         help="number of parallel workers for reading files")
 
     args = parser.parse_args()
