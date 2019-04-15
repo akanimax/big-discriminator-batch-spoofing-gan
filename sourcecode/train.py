@@ -149,7 +149,7 @@ def parse_arguments():
     # FID RELATED ARGUMENTS ... :)
     # =======================================================================================
 
-    parser.add_argument("num_fid_images", action="store", type=int,
+    parser.add_argument("--num_fid_images", action="store", type=int,
                         default=50000,
                         help="number of images used for calculating fid. Default: 50K")
 
