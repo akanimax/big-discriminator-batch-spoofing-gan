@@ -210,7 +210,7 @@ class Discriminator(th.nn.Module):
 
 
 class MSG_GAN:
-    """ Unconditional TeacherGAN
+    """ Unconditional MSG-GAN
 
         args:
             depth: depth of the GAN (will be used for each generator and discriminator)
@@ -279,7 +279,10 @@ class MSG_GAN:
 
         return generated_images
 
-    def optimize_discriminator(self, dis_optim, noise, real_batch, loss_fn):
+    def optimize_discriminator(self, dis_optim, noise,
+                               real_batch, loss_fn,
+                               accumulate=False, zero_grad=True,
+                               num_accumulations=1):
         """
         performs one step of weight update on discriminator using the batch of data
         :param dis_optim: discriminator optimizer
@@ -287,23 +290,39 @@ class MSG_GAN:
         :param real_batch: real samples batch
                            should contain a list of tensors at different scales
         :param loss_fn: loss function to be used (object of GANLoss)
-        :return: current loss
+        :param accumulate: whether to accumulate or make a step
+        :param zero_grad: used to control the behaviour of grad buffers
+        :param num_accumulations: number of accumulation steps performed
+                                  (required to scale the loss function)
+        :return: current loss (accumulation scaled value)
         """
 
         # generate a batch of samples
         fake_samples = self.gen(noise)
         fake_samples = list(map(lambda x: x.detach(), fake_samples))
 
-        loss = loss_fn.dis_loss(real_batch, fake_samples)
+        # scale the loss by the number of accumulation steps performed
+        # (if not performed, it is 1)
+        loss = loss_fn.dis_loss(real_batch, fake_samples) / num_accumulations
 
-        # optimize discriminator
-        dis_optim.zero_grad()
+        # optimize discriminator according to the accumulation dynamics
+        # zero the grad of the discriminator weights if required
+        if zero_grad:
+            dis_optim.zero_grad()
+
+        # perform the backward pass to accumulate the gradients
         loss.backward()
-        dis_optim.step()
+
+        # if not running in accumulate mode, (make a step)
+        if not accumulate:
+            dis_optim.step()
 
         return loss.item()
 
-    def optimize_generator(self, gen_optim, noise, real_batch, loss_fn):
+    def optimize_generator(self, gen_optim, noise,
+                           real_batch, loss_fn,
+                           accumulate=False, zero_grad=True,
+                           num_accumulations=1):
         """
         performs one step of weight update on generator using the batch of data
         :param gen_optim: generator optimizer
@@ -311,22 +330,34 @@ class MSG_GAN:
         :param real_batch: real samples batch
                            should contain a list of tensors at different scales
         :param loss_fn: loss function to be used (object of GANLoss)
-        :return: current loss
+        :param accumulate: whether to accumulate or make a step
+        :param zero_grad: used to control the behaviour of grad buffers
+        :param num_accumulations: number of accumulation steps performed
+                                  (required to scale the loss function)
+        :return: current loss (accumulation scaled value)
         """
 
         # generate a batch of samples
         fake_samples = self.gen(noise)
 
-        loss = loss_fn.gen_loss(real_batch, fake_samples)
+        loss = loss_fn.gen_loss(real_batch, fake_samples) / num_accumulations
 
-        # optimize discriminator
-        gen_optim.zero_grad()
+        # optimize the generator according the accumulation dynamics
+        if zero_grad:
+            gen_optim.zero_grad()
+
+        # perform backward pass for gradient accumulation
         loss.backward()
-        gen_optim.step()
 
-        # if self.use_ema is true, apply the moving average here:
-        if self.use_ema:
-            self.ema_updater(self.gen_shadow, self.gen, self.ema_decay)
+        # perform an update step if not running in the accumulate mode
+        if not accumulate:
+            gen_optim.step()
+
+            # if self.use_ema is true, apply the moving average here:
+            # Note that ema update will also be done only during the update
+            # pass of the function (not during accumulation).
+            if self.use_ema:
+                self.ema_updater(self.gen_shadow, self.gen, self.ema_decay)
 
         return loss.item()
 
@@ -364,8 +395,51 @@ class MSG_GAN:
                                   normalize=True, scale_each=True, padding=0)
                 sum_writer.add_image(res, image, step)
 
+    def _downsampled_images(self, images):
+        """
+        private utility function to compute list of downsampled images
+        :param images: Original sized images
+        :return: images => list of downsampled images
+        """
+        from torch.nn.functional import avg_pool2d
+        # create a list of downsampled images from the real images:
+        images = [images] + [avg_pool2d(images, int(np.power(2, i)))
+                             for i in range(1, self.depth)]
+        images = list(reversed(images))
+
+        return images
+
+    def _get_images_and_latents(self, data_store, normalize_latents):
+        """
+        private utility function to obtain random latent_points and
+        downsampled images from the datastore
+        :param data_store: object containing the data
+        :param normalize_latents: boolean for hyper-sphere normalization
+        :return: images, latents => images and random latent points
+        """
+        # extract current batch of data for training
+        batch = next(data_store)
+        images = batch.to(self.device)
+        extracted_batch_size = images.shape[0]
+
+        # list of downsampled versions of images
+        images = self._downsampled_images(images)
+
+        # sample some random latent points
+        gan_input = th.randn(
+            extracted_batch_size, self.latent_size).to(self.device)
+
+        # normalize them if asked
+        if normalize_latents:
+            gan_input = ((gan_input
+                          / gan_input.norm(dim=-1, keepdim=True))
+                         * (self.latent_size ** 0.5))
+
+        return images, gan_input
+
     def train(self, data, gen_optim, dis_optim, loss_fn, normalize_latents=True,
-              start=1, num_epochs=12, feedback_factor=10, checkpoint_factor=1,
+              start=1, num_epochs=12, spoofing_factor=1,
+              feedback_factor=10, checkpoint_factor=1,
               data_percentage=100, num_samples=36,
               log_dir=None, sample_dir="./samples", num_fid_images=50000,
               save_dir="./models", fid_temp_folder="./samples/fid_imgs/",
@@ -382,6 +456,9 @@ class MSG_GAN:
         :param start: starting epoch number
         :param num_epochs: total number of epochs to run for (ending epoch number)
                            note this is absolute and not relative to start
+        :param spoofing_factor: number of actual batches used to spoof a bigger batch
+                                for instance, actual batch size is 16 and
+                                spoofing factor is 4, then virtual batch_size is 64
         :param feedback_factor: number of logs generated and samples generated
                                 during training per epoch
         :param checkpoint_factor: save model after these many epochs
@@ -397,13 +474,13 @@ class MSG_GAN:
                                Same will be used for calculating the fid too.
         :return: None (writes multiple files to disk)
         """
-
-        from torch.nn.functional import avg_pool2d
         from tensorboardX import SummaryWriter
         from shutil import rmtree
         from tqdm import tqdm
         from scipy.misc import imsave
         from MSG_GAN.FID import fid_score
+        from math import ceil
+        from MSG_GAN.utils.iter_utils import hn_wrapper
 
         # turn the generator and discriminator into train mode
         self.gen.train()
@@ -431,53 +508,112 @@ class MSG_GAN:
                            / fixed_input.norm(dim=-1, keepdim=True)
                            * (self.latent_size ** 0.5))
 
+        viter_samples = 2 * data.batch_size * spoofing_factor
+        total_imgs = len(data.dataset)
+        total_batches = int(total_imgs / viter_samples)
+        limit = int(ceil((data_percentage / 100) * total_batches))
+
         # create a global time counter
         global_time = time.time()
         global_step = 0
 
         for epoch in range(start, num_epochs + 1):
             start_time = timeit.default_timer()  # record time at the start of epoch
-
             print("\nEpoch: %d" % epoch)
-            total_batches = len(iter(data))
 
-            limit = int((data_percentage / 100) * total_batches)
+            # setup the dataloader (where the real images are sampled from)
+            real_data_store = iter(hn_wrapper(data))
+            batch_counter = 0  # counter for number of batches completed
+            # this includes the two Generator passes and spoofing adjusted
+            # batch_sizes
 
-            for (i, batch) in enumerate(data, 1):
+            while real_data_store.hasnext() and batch_counter <= limit:
 
-                # extract current batch of data for training
-                images = batch.to(self.device)
-                extracted_batch_size = images.shape[0]
+                # perform batch spoofing via gradient accumulation
+                dis_loss, gen_loss = 0, 0  # losses initialized to zeros
+                for spoofing_iter in range(spoofing_factor - 1):
 
-                # create a list of downsampled images from the real images:
-                images = [images] + [avg_pool2d(images, int(np.power(2, i)))
-                                     for i in range(1, self.depth)]
-                images = list(reversed(images))
+                    # =============================================================
+                    # Discriminator spoofing pass
+                    # =============================================================
 
-                # sample some random latent points
-                gan_input = th.randn(
-                    extracted_batch_size, self.latent_size).to(self.device)
+                    # sample images and latents for discriminator pass
+                    images, gan_input = self._get_images_and_latents(
+                        real_data_store, normalize_latents)
 
-                # normalize them if asked
-                if normalize_latents:
-                    gan_input = (gan_input
-                                 / gan_input.norm(dim=-1, keepdim=True)
-                                 * (self.latent_size ** 0.5))
+                    # accumulate gradients in the discriminator:
+                    dis_loss += self.optimize_discriminator(
+                        dis_optim, gan_input,
+                        images, loss_fn,
+                        accumulate=True,
+                        zero_grad=(spoofing_iter == 0),
+                        num_accumulations=spoofing_factor)
 
-                # optimize the discriminator:
-                dis_loss = self.optimize_discriminator(dis_optim, gan_input,
-                                                       images, loss_fn)
+                    # =============================================================
+                    # Generator spoofing pass
+                    # =============================================================
 
-                # optimize the generator:
-                gen_loss = self.optimize_generator(gen_optim, gan_input,
-                                                   images, loss_fn)
+                    # re-sample images and latents for generator pass
+                    images, gan_input = self._get_images_and_latents(
+                        real_data_store, normalize_latents)
+
+                    # accumulate gradients in the generator
+                    gen_loss += self.optimize_generator(
+                        gen_optim, gan_input,
+                        images, loss_fn,
+                        accumulate=True,
+                        zero_grad=(spoofing_iter == 0),
+                        num_accumulations=spoofing_factor)
+
+                    # =============================================================
+
+                # =============================================================
+                # Discriminator update pass
+                # (note values for accumulate and zero_grad)
+                # =============================================================
+
+                # sample images and latents for discriminator pass
+                images, gan_input = self._get_images_and_latents(
+                    real_data_store, normalize_latents)
+
+                # accumulate final gradients in the discriminator and make a step:
+                dis_loss += self.optimize_discriminator(
+                    dis_optim, gan_input,
+                    images, loss_fn,
+                    accumulate=False,  # perform update
+                    zero_grad=False,  # do not make gradient buffers zero
+                    num_accumulations=spoofing_factor)
+
+                # =============================================================
+                # Generator update pass
+                # (note values for accumulate and zero_grad)
+                # =============================================================
+
+                # sample images and latents for generator pass
+                images, gan_input = self._get_images_and_latents(
+                    real_data_store, normalize_latents)
+
+                # accumulate final gradients in the generator and make a step:
+                gen_loss += self.optimize_generator(
+                    dis_optim, gan_input,
+                    images, loss_fn,
+                    accumulate=False,  # perform update
+                    zero_grad=False,  # do not make gradient buffers zero
+                    num_accumulations=spoofing_factor)
+
+                # =============================================================
+
+                # increment the global_step and the batch_counter:
+                global_step += 1
+                batch_counter += 1
 
                 # provide a loss feedback
-                if i % int(limit / feedback_factor) == 0 or i == 1:
+                if batch_counter % int(limit / feedback_factor) == 0 or \
+                        batch_counter == 1:
                     elapsed = time.time() - global_time
                     elapsed = str(datetime.timedelta(seconds=elapsed))
                     print("Elapsed [%s] batch: %d  d_loss: %f  g_loss: %f"
-                          % (elapsed, i, dis_loss, gen_loss))
+                          % (elapsed, batch_counter, dis_loss, gen_loss))
 
                     # add summary of the losses
                     sum_writer.add_scalar("dis_loss", dis_loss, global_step)
@@ -494,7 +630,7 @@ class MSG_GAN:
                     # create a grid of samples and save it
                     gen_img_files = [os.path.join(sample_dir, res, "gen_" +
                                                   str(epoch) + "_" +
-                                                  str(i) + ".png")
+                                                  str(batch_counter) + ".png")
                                      for res in reses]
 
                     # Make sure all the required directories exist
@@ -513,12 +649,6 @@ class MSG_GAN:
                             sum_writer,
                             reses,
                             global_step)
-
-                # increment the global_step:
-                global_step += 1
-
-                if i > limit:
-                    break
 
             # calculate the time required for the epoch
             stop_time = timeit.default_timer()
@@ -544,7 +674,8 @@ class MSG_GAN:
                     th.save(self.gen_shadow.state_dict(), gen_shadow_save_file)
 
                 # ==================================================================
-                # Perform the FID calculation during training for an estimate
+                # Perform the FID calculation during training for estimating
+                # the quality of the training
                 # ==================================================================
 
                 # setup the directory for generating the images

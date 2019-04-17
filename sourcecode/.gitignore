@@ -1,3 +1,6 @@
 # ignore models and samples directory
 models/
 samples/
+
+# ignore the real_data_stats directory
+real_data_stats/

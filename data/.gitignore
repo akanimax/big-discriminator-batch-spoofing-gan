@@ -1,4 +1,4 @@
-# ignore the link to celeba dataset and the CAT dataset
+# ignore the link to celeba dataset and the other datasets
 celeba
 CAT_dataset
 indian-celebs

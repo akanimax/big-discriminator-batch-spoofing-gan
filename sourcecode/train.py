@@ -88,6 +88,11 @@ def parse_arguments():
                         default=128,
                         help="batch_size for training")
 
+    parser.add_argument("--spoofing_factor", action="store", type=int,
+                        default=16,
+                        help="number of passes done (gradient accumulation) " +
+                             "before making an update step")
+
     parser.add_argument("--start", action="store", type=int,
                         default=1,
                         help="starting epoch number")
@@ -286,6 +291,7 @@ def main(args):
         save_dir=args.model_dir,
         log_dir=args.model_dir,
         start=args.start,
+        spoofing_factor=args.spoofing_factor,
         num_fid_images=args.num_fid_images,
         fid_temp_folder=args.fid_temp_folder,
         fid_real_stats=args.fid_real_stats,
