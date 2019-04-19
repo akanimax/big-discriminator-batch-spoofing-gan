@@ -358,7 +358,7 @@ class MSG_GAN:
             # pass of the function (not during accumulation).
             if self.use_ema:
                 self.ema_updater(self.gen_shadow, self.gen, self.ema_decay)
-
+        
         return loss.item()
 
     def create_grid(self, samples, img_files,
