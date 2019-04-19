@@ -35,7 +35,7 @@ def main(args):
     model = InceptionV3([block_idx])
     model.cuda()
 
-    m, s = _compute_statistics_of_path(args.images_path, model, 128, 2048, True)
+    m, s = _compute_statistics_of_path(args.images_path, model, 64, 2048, True)
 
     np.savez(args.save_path, mu=m, sigma=s)
 
