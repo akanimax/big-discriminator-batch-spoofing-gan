@@ -527,7 +527,10 @@ class MSG_GAN:
             # this includes the two Generator passes and spoofing adjusted
             # batch_sizes
 
-            while real_data_store.hasnext() and batch_counter <= limit:
+            # Note that this might lose the last batch (samples less than batch_size)
+            # but the subsequent epochs perform random shuffling prior to starting the
+            # training for that epoch
+            while real_data_store.hasnext() and batch_counter < limit:
 
                 # perform batch spoofing via gradient accumulation
                 dis_loss, gen_loss = 0, 0  # losses initialized to zeros
@@ -546,8 +549,7 @@ class MSG_GAN:
                         dis_optim, gan_input,
                         images, loss_fn,
                         accumulate=True,
-                        zero_grad=(spoofing_iter == 0),
-                        num_accumulations=spoofing_factor)
+                        zero_grad=(spoofing_iter == 0))
 
                     # =============================================================
                     # Generator spoofing pass
@@ -562,8 +564,7 @@ class MSG_GAN:
                         gen_optim, gan_input,
                         images, loss_fn,
                         accumulate=True,
-                        zero_grad=(spoofing_iter == 0),
-                        num_accumulations=spoofing_factor)
+                        zero_grad=(spoofing_iter == 0))
 
                     # =============================================================
 
@@ -581,8 +582,7 @@ class MSG_GAN:
                     dis_optim, gan_input,
                     images, loss_fn,
                     accumulate=False,  # perform update
-                    zero_grad=False,  # do not make gradient buffers zero
-                    num_accumulations=spoofing_factor)
+                    zero_grad=False)  # do not make gradient buffers zero
 
                 # =============================================================
                 # Generator update pass
@@ -598,8 +598,7 @@ class MSG_GAN:
                     dis_optim, gan_input,
                     images, loss_fn,
                     accumulate=False,  # perform update
-                    zero_grad=False,  # do not make gradient buffers zero
-                    num_accumulations=spoofing_factor)
+                    zero_grad=False)  # do not make gradient buffers zero
 
                 # =============================================================
 
