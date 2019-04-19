@@ -534,6 +534,10 @@ class MSG_GAN:
 
                 # perform batch spoofing via gradient accumulation
                 dis_loss, gen_loss = 0, 0  # losses initialized to zeros
+
+                # =================================================================
+                # discriminator iterations:
+                # =================================================================
                 for spoofing_iter in range(spoofing_factor - 1):
 
                     # =============================================================
@@ -549,24 +553,8 @@ class MSG_GAN:
                         dis_optim, gan_input,
                         images, loss_fn,
                         accumulate=True,
-                        zero_grad=(spoofing_iter == 0))
-
-                    # =============================================================
-                    # Generator spoofing pass
-                    # =============================================================
-
-                    # re-sample images and latents for generator pass
-                    images, gan_input = self._get_images_and_latents(
-                        real_data_store, normalize_latents)
-
-                    # accumulate gradients in the generator
-                    gen_loss += self.optimize_generator(
-                        gen_optim, gan_input,
-                        images, loss_fn,
-                        accumulate=True,
-                        zero_grad=(spoofing_iter == 0))
-
-                    # =============================================================
+                        zero_grad=(spoofing_iter == 0),
+                        num_accumulations=spoofing_factor)
 
                 # =============================================================
                 # Discriminator update pass
@@ -582,7 +570,31 @@ class MSG_GAN:
                     dis_optim, gan_input,
                     images, loss_fn,
                     accumulate=False,  # perform update
-                    zero_grad=False)  # do not make gradient buffers zero
+                    zero_grad=False,  # do not make gradient buffers zero
+                    num_accumulations=spoofing_factor)
+
+                # =================================================================
+
+                # =================================================================
+                # generator iterations:
+                # =================================================================
+                for spoofing_iter in range(spoofing_factor - 1):
+
+                    # =============================================================
+                    # Generator spoofing pass
+                    # =============================================================
+
+                    # re-sample images and latents for generator pass
+                    images, gan_input = self._get_images_and_latents(
+                        real_data_store, normalize_latents)
+
+                    # accumulate gradients in the generator
+                    gen_loss += self.optimize_generator(
+                        gen_optim, gan_input,
+                        images, loss_fn,
+                        accumulate=True,
+                        zero_grad=(spoofing_iter == 0),
+                        num_accumulations=spoofing_factor)
 
                 # =============================================================
                 # Generator update pass
@@ -598,9 +610,10 @@ class MSG_GAN:
                     dis_optim, gan_input,
                     images, loss_fn,
                     accumulate=False,  # perform update
-                    zero_grad=False)  # do not make gradient buffers zero
+                    zero_grad=False,  # do not make gradient buffers zero
+                    num_accumulations=spoofing_factor)
 
-                # =============================================================
+                # =================================================================
 
                 # increment the global_step and the batch_counter:
                 global_step += 1
