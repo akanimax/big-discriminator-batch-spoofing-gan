@@ -441,7 +441,8 @@ class MSG_GAN:
               start=1, num_epochs=12, spoofing_factor=1,
               feedback_factor=10, checkpoint_factor=1,
               data_percentage=100, num_samples=36,
-              log_dir=None, sample_dir="./samples", num_fid_images=50000,
+              log_dir=None, sample_dir="./samples", 
+              log_fid_values=False, num_fid_images=50000,
               save_dir="./models", fid_temp_folder="./samples/fid_imgs/",
               fid_real_stats=None, fid_batch_size=64):
         """
@@ -466,6 +467,7 @@ class MSG_GAN:
         :param num_samples: number of samples to be drawn for feedback grid
         :param log_dir: path to directory for saving the loss.log file
         :param sample_dir: path to directory for saving generated samples' grids
+        :param log_fid_values: boolean for whether to log fid values during training or not
         :param num_fid_images: number of images to generate for calculating the FID
         :param save_dir: path to directory for saving the trained models
         :param fid_temp_folder: path to save the generated images
@@ -570,7 +572,7 @@ class MSG_GAN:
                     dis_optim, gan_input,
                     images, loss_fn,
                     accumulate=False,  # perform update
-                    zero_grad=False,  # do not make gradient buffers zero
+                    zero_grad=spoofing_factor == 1,  # make gradient buffers zero only if spoofing_factor==1
                     num_accumulations=spoofing_factor)
 
                 # =================================================================
@@ -610,7 +612,7 @@ class MSG_GAN:
                     dis_optim, gan_input,
                     images, loss_fn,
                     accumulate=False,  # perform update
-                    zero_grad=False,  # do not make gradient buffers zero
+                    zero_grad=spoofing_factor == 1,  # make gradient buffers zero only if spoofing factor is 1
                     num_accumulations=spoofing_factor)
 
                 # =================================================================
@@ -685,55 +687,58 @@ class MSG_GAN:
                                                         + str(epoch) + ".pth")
                     th.save(self.gen_shadow.state_dict(), gen_shadow_save_file)
 
-                # ==================================================================
-                # Perform the FID calculation during training for estimating
-                # the quality of the training
-                # ==================================================================
+                print("log_fid_values:", log_fid_values)
+                if log_fid_values:  # perform the following fid calculations during training 
+                    # if the boolean is set to true
+                    # ==================================================================
+                    # Perform the FID calculation during training for estimating
+                    # the quality of the training
+                    # ==================================================================
 
-                # setup the directory for generating the images
-                if os.path.isdir(fid_temp_folder):
-                    rmtree(fid_temp_folder)
-                os.makedirs(fid_temp_folder, exist_ok=True)
+                    # setup the directory for generating the images
+                    if os.path.isdir(fid_temp_folder):
+                        rmtree(fid_temp_folder)
+                    os.makedirs(fid_temp_folder, exist_ok=True)
 
-                # generate the images:
-                print("generating images for fid calculation ...")
-                pbar = tqdm(total=num_fid_images)
-                generated_images = 0
+                    # generate the images:
+                    print("generating images for fid calculation ...")
+                    pbar = tqdm(total=num_fid_images)
+                    generated_images = 0
 
-                while generated_images < num_fid_images:
-                    b_size = min(fid_batch_size, num_fid_images - generated_images)
-                    points = th.randn(b_size, self.latent_size).to(self.device)
-                    if normalize_latents:
-                        points = (points / points.norm(dim=1, keepdim=True)) \
-                                 * (self.latent_size ** 0.5)
-                    imgs = self.gen(points)[-1].detach()
-                    for i in range(len(imgs)):
-                        imgs[i] = Generator.adjust_dynamic_range(imgs[i])
-                    pbar.update(b_size)
-                    for img in imgs:
-                        imsave(os.path.join(fid_temp_folder,
-                                            str(generated_images) + ".jpg"),
-                               img.permute(1, 2, 0).cpu())
-                        generated_images += 1
-                pbar.close()
+                    while generated_images < num_fid_images:
+                        b_size = min(fid_batch_size, num_fid_images - generated_images)
+                        points = th.randn(b_size, self.latent_size).to(self.device)
+                        if normalize_latents:
+                            points = (points / points.norm(dim=1, keepdim=True)) \
+                                     * (self.latent_size ** 0.5)
+                            imgs = self.gen(points)[-1].detach()
+                        for i in range(len(imgs)):
+                            imgs[i] = Generator.adjust_dynamic_range(imgs[i])
+                        pbar.update(b_size)
+                        for img in imgs:
+                            imsave(os.path.join(fid_temp_folder,
+                                                str(generated_images) + ".jpg"),
+                                   img.permute(1, 2, 0).cpu())
+                            generated_images += 1
+                    pbar.close()
 
-                # compute the fid now:
-                fid = fid_score.calculate_fid_given_paths(
-                    (fid_real_stats, fid_temp_folder),
-                    fid_batch_size,
-                    True if self.device == th.device("cuda") else False,
-                    2048  # using he default value
-                )
+                    # compute the fid now:
+                    fid = fid_score.calculate_fid_given_paths(
+                        (fid_real_stats, fid_temp_folder),
+                        fid_batch_size,
+                        True if self.device == th.device("cuda") else False,
+                        2048  # using he default value
+                    )
 
-                # print the compute fid value:
-                print("FID at epoch %d: %.6f" % (epoch, fid))
+                    # print the compute fid value:
+                    print("FID at epoch %d: %.6f" % (epoch, fid))
 
-                # log the fid value in tensorboard:
-                sum_writer.add_scalar("FID", fid, epoch)
-                # note that for fid value, the global step is the epoch number.
-                # it is not the global step. This makes the fid graph more informative
+                    # log the fid value in tensorboard:
+                    sum_writer.add_scalar("FID", fid, epoch)
+                    # note that for fid value, the global step is the epoch number.
+                    # it is not the global step. This makes the fid graph more informative
 
-                # ==================================================================
+                    # ==================================================================
 
         print("Training completed ...")
 

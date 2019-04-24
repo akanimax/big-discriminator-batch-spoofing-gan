@@ -154,6 +154,11 @@ def parse_arguments():
     # FID RELATED ARGUMENTS ... :)
     # =======================================================================================
 
+    parser.add_argument("--log_fid_values", action="store", type=bool,
+                        default=False,
+                        help="Whether to log the fid values during training." +
+                             " Following args are used only if this is true")
+
     parser.add_argument("--num_fid_images", action="store", type=int,
                         default=50000,
                         help="number of images used for calculating fid. Default: 50K")
@@ -292,6 +297,7 @@ def main(args):
         log_dir=args.model_dir,
         start=args.start,
         spoofing_factor=args.spoofing_factor,
+        log_fid_values=args.log_fid_values,
         num_fid_images=args.num_fid_images,
         fid_temp_folder=args.fid_temp_folder,
         fid_real_stats=args.fid_real_stats,
