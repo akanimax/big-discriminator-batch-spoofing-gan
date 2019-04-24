@@ -164,9 +164,13 @@ class Discriminator(th.nn.Module):
             self.layers.append(layer)
             self.rgb_to_features.append(rgb)
 
-        # just replace the last converter
-        self.rgb_to_features[self.depth - 2] = \
-            from_rgb(self.feature_size // np.power(2, i - 3))
+        # handle the case where the depth is less than or equal to 4
+        if self.depth > 4:
+            self.rgb_to_features[self.depth - 2] = \
+                from_rgb(self.feature_size // np.power(2, i - 3))
+        else:
+            self.rgb_to_features[self.depth - 2] = \
+                from_rgb(self.feature_size * 2)
 
         # parallelize the modules from the module-lists if asked to:
         if self.gpu_parallelize:
@@ -572,7 +576,7 @@ class MSG_GAN:
                     dis_optim, gan_input,
                     images, loss_fn,
                     accumulate=False,  # perform update
-                    zero_grad=spoofing_factor == 1,  # make gradient buffers zero only if spoofing_factor==1
+                    zero_grad=spoofing_factor == 1,  # make gradient buffers zero if spoofing_factor is 1
                     num_accumulations=spoofing_factor)
 
                 # =================================================================
@@ -609,10 +613,10 @@ class MSG_GAN:
 
                 # accumulate final gradients in the generator and make a step:
                 gen_loss += self.optimize_generator(
-                    dis_optim, gan_input,
+                    gen_optim, gan_input,
                     images, loss_fn,
                     accumulate=False,  # perform update
-                    zero_grad=spoofing_factor == 1,  # make gradient buffers zero only if spoofing factor is 1
+                    zero_grad=spoofing_factor == 1,  # make gradient buffers zero if spoofing_factor is 1
                     num_accumulations=spoofing_factor)
 
                 # =================================================================
@@ -653,9 +657,12 @@ class MSG_GAN:
                     for gen_img_file in gen_img_files:
                         os.makedirs(os.path.dirname(gen_img_file), exist_ok=True)
 
+                    # following zero_grads are required to allow pytorch
+                    # adjust buffers properly on the GPU.
+                    # This causes lesser GPU memory consumption
                     dis_optim.zero_grad()
                     gen_optim.zero_grad()
-                    with th.no_grad():
+                    with th.no_grad():  # this makes the training faster.
                         self.create_grid(
                             self.gen(fixed_input) if not self.use_ema
                             else self.gen_shadow(fixed_input),
