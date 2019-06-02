@@ -2,6 +2,7 @@
 
 import argparse
 import torch as th
+import numpy as np
 import os
 from torch.backends import cudnn
 from MSG_GAN.GAN import Generator
@@ -31,7 +32,7 @@ def parse_arguments():
                         help="pretrained weights file for generator", required=True)
 
     parser.add_argument("--latent_size", action="store", type=int,
-                        default=256,
+                        default=512,
                         help="latent size for the generator")
 
     parser.add_argument("--depth", action="store", type=int,
@@ -72,6 +73,22 @@ def progressive_upscaling(images):
     return images
 
 
+def adjust_dynamic_range(data, drange_in=(-1, 1), drange_out=(0, 1)):
+    """
+    adjust the dynamic colour range of the given input data
+    :param data: input image data
+    :param drange_in: original range of input
+    :param drange_out: required range of output
+    :return: img => colour range adjusted images
+    """
+    if drange_in != drange_out:
+        scale = (np.float32(drange_out[1]) - np.float32(drange_out[0])) / (
+                np.float32(drange_in[1]) - np.float32(drange_in[0]))
+        bias = (np.float32(drange_out[0]) - np.float32(drange_in[0]) * scale)
+        data = data * scale + bias
+    return th.clamp(data, min=0, max=1)
+
+
 def main(args):
     """
     Main function for the script
@@ -106,15 +123,21 @@ def main(args):
         # resize the images:
         ss_images = progressive_upscaling(ss_images)
 
-        # reverse the ss_images
-        ss_images = list(reversed(ss_images))
-
         # squeeze the batch dimension from each image
         ss_images = list(map(lambda x: th.squeeze(x, dim=0), ss_images))
 
-        # make a grid out of them
+        # adjust the number of columns used
         num_cols = int(ceil(sqrt(len(ss_images)))) if args.num_columns is None \
             else args.num_columns
+
+        if num_cols == 1:
+            # create a vertical tower hence reverse the images
+            # reverse the ss_images
+            ss_images = list(reversed(ss_images))
+
+        # adjust the colour of the images
+        ss_images = [adjust_dynamic_range(ss_image) for ss_image in ss_images]
+
         ss_image = make_grid(
             ss_images,
             nrow=num_cols,

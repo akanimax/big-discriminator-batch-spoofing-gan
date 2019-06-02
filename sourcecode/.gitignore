@@ -4,3 +4,7 @@ samples/
 
 # ignore the real_data_stats directory
 real_data_stats/
+
+# ignore these folders too:
+fid_plots/
+inception_plots/
