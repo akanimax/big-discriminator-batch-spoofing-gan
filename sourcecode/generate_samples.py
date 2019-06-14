@@ -109,10 +109,11 @@ def main(args):
     save_path = args.out_dir
 
     print("Generating scale synchronized images ...")
+    points = th.randn(args.num_samples, args.latent_size)
     for img_num in tqdm(range(1, args.num_samples + 1)):
         # generate the images:
         with th.no_grad():
-            point = th.randn(1, args.latent_size)
+            point = th.unsqueeze(points[img_num - 1], 0)
             point = (point / point.norm()) * (args.latent_size ** 0.5)
             ss_images = gen(point)
 
