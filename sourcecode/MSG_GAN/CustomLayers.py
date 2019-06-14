@@ -360,11 +360,14 @@ class DisFinalBlock(th.nn.Module):
 
         super().__init__()
 
-        # declare the required modules for forward pass
-        self.batch_discriminator = MinibatchStdDev()
+        # =======================================================
+        # Branch change. In this branch, we are removing the
+        # Min-batch_std-dev from the discriminator computations
+        # entirely
+        # =======================================================
 
         if use_eql:
-            self.conv_1 = _equalized_conv2d(in_channels + 1, in_channels, (3, 3),
+            self.conv_1 = _equalized_conv2d(in_channels, in_channels, (3, 3),
                                             pad=1, bias=True)
             self.conv_2 = _equalized_conv2d(in_channels, in_channels, (4, 4),
                                             bias=True)
@@ -374,7 +377,7 @@ class DisFinalBlock(th.nn.Module):
 
         else:
             # modules required:
-            self.conv_1 = Conv2d(in_channels + 1, in_channels, (3, 3), padding=1, bias=True)
+            self.conv_1 = Conv2d(in_channels, in_channels, (3, 3), padding=1, bias=True)
             self.conv_2 = Conv2d(in_channels, in_channels, (4, 4), bias=True)
 
             # final conv layer emulates a fully connected layer
@@ -389,11 +392,8 @@ class DisFinalBlock(th.nn.Module):
         :param x: input
         :return: y => output
         """
-        # minibatch_std_dev layer
-        y = self.batch_discriminator(x)
-
         # define the computations
-        y = self.lrelu(self.conv_1(y))
+        y = self.lrelu(self.conv_1(x))
         y = self.lrelu(self.conv_2(y))
 
         # fully connected layer
@@ -441,7 +441,6 @@ class DisGeneralConvBlock(th.nn.Module):
         :param x: input
         :return: y => output
         """
-        from torch.nn.functional import interpolate
 
         # define the computations
         y = self.lrelu(self.conv_1(x))
