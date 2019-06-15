@@ -101,7 +101,7 @@ class Discriminator(th.nn.Module):
     """ Discriminator of the GAN """
 
     def __init__(self, depth=7, feature_size=512,
-                 use_eql=True, gpu_parallelize=False):
+                 use_eql=True):
         """
         constructor for the class
         :param depth: total depth of the discriminator
@@ -109,9 +109,6 @@ class Discriminator(th.nn.Module):
         :param feature_size: size of the deepest features extracted
                              (Must be equal to Generator latent_size)
         :param use_eql: whether to use the equalized learning rate or not
-        :param gpu_parallelize: whether to use DataParallel on the discriminator
-                                Note that the Last block contains StdDev layer
-                                So, it is not parallelized.
         """
         from torch.nn import ModuleList
         from MSG_GAN.CustomLayers import DisGeneralConvBlock, \
@@ -127,7 +124,6 @@ class Discriminator(th.nn.Module):
                 "feature size cannot be produced"
 
         # create state of the object
-        self.gpu_parallelize = gpu_parallelize
         self.use_eql = use_eql
         self.depth = depth
         self.feature_size = feature_size
@@ -172,17 +168,9 @@ class Discriminator(th.nn.Module):
             self.rgb_to_features[self.depth - 2] = \
                 from_rgb(self.feature_size * 2)
 
-        # parallelize the modules from the module-lists if asked to:
-        if self.gpu_parallelize:
-            for i in range(len(self.layers)):
-                self.layers[i] = th.nn.DataParallel(self.layers[i])
-                self.rgb_to_features[i] = th.nn.DataParallel(
-                    self.rgb_to_features[i])
-
-        # Note that since the FinalBlock contains the StdDev layer,
-        # it cannot be parallelized so easily. It will have to be parallelized
-        # from the Lower level (from CustomLayers). This much parallelism
-        # seems enough for me.
+        # Since this branch doesn't contain the min-batchStddev layer,
+        # We can parallelize this module entirely
+        # The parallelization happens in the MSG-GAN module
 
     def forward(self, inputs):
         """
@@ -232,12 +220,12 @@ class MSG_GAN:
         from torch.nn import DataParallel
 
         self.gen = Generator(depth, latent_size, use_eql=use_eql).to(device)
+        self.dis = Discriminator(depth, latent_size, use_eql=use_eql).to(device)
 
         # Parallelize them if required:
         if device == th.device("cuda"):
             self.gen = DataParallel(self.gen)
-            self.dis = Discriminator(depth, latent_size,
-                                     use_eql=use_eql, gpu_parallelize=True).to(device)
+            self.dis = DataParallel(self.dis)
         else:
             self.dis = Discriminator(depth, latent_size, use_eql=True).to(device)
 
